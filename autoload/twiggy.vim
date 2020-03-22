@@ -110,6 +110,7 @@ endfunction
 "   {{{2 cmd
 function! s:system(cmd, bg) abort
   let command = a:cmd
+  " echom command
 
   if a:bg
     if exists('g:loaded_dispatch') && g:loaded_dispatch &&
@@ -154,6 +155,7 @@ endfunction
 "   {{{2 git_cmd
 function! s:git_cmd(cmd, bg) abort
   let cmd = s:gitize(a:cmd)
+  " echom cmd
   let s:git_cmd_run = 1
   if a:bg
     call s:system(cmd, a:bg)
@@ -199,7 +201,9 @@ endfunction
 function! s:parse_branch(branch, type) abort
   let branch = {}
 
-  let pieces = split(a:branch, "\t\t")
+  " echom "branch: ".a:branch
+  let pieces = split(a:branch, "±")
+  " echom pieces
 
   let branch.current = pieces[0] ==# "*"
 
@@ -278,8 +282,34 @@ endfunction
 " {{{1 Git
 "   {{{2 no_commits
 function! s:no_commits() abort
-  return s:gsub(s:git_cmd('rev-list -n 1 --all | wc -l', 0)[0], ' ', '') ==# '0'
+  " return s:gsub(s:git_cmd('rev-list -n 1 --all | wc -l', 0)[0], ' ', '') ==# '0'
+  " windows version (powershell)
+  return s:gsub(s:git_cmd_wc('rev-list -n 1 --all', 0)[0], ' ', '') ==# '0'
 endfunction
+
+
+"   {{{2 git_cmd
+function! s:git_cmd_wc(cmd, bg) abort
+  let cmd = s:gitize(a:cmd)
+  let s:git_cmd_run = 1
+  let res = len(s:system(cmd, a:bg))
+  return res
+endfunction
+
+"   {{{2 git_cmd
+function! s:git_cmd_tail(cmd, bg, tailarg) abort
+  let cmd = s:gitize(a:cmd)
+  let s:git_cmd_run = 1
+  " echom cmd
+  let res = s:system(cmd, a:bg)
+  echo res
+  echo len(res)
+  if len(res) == 0
+    return ""
+  endif
+  return res[a:tailarg]
+endfunction
+
 
 "   {{{2 dirty_tree
 function! s:dirty_tree() abort
@@ -296,7 +326,7 @@ function! s:_git_branch_vv(type) abort
         \ '%(upstream:short)',
         \ '%(upstream:track)',
         \ '%(contents:subject)',
-        \ ], "\t\t")
+        \ ], "±")
   for branch in s:git_cmd('for-each-ref refs/' . a:type . " --format=$'".format."'", 0)
     call add(branches, s:parse_branch(branch, a:type))
   endfor
@@ -310,8 +340,11 @@ function! s:get_git_mode() abort
   if isdirectory(git_dir . '/rebase-apply') ||
         \ isdirectory(git_dir . '/rebase-merge')
     return 'rebase'
+  " elseif s:fexists(git_dir . '/MERGE_HEAD') ||
+  "       \ !empty(s:git_cmd('diff --shortstat --diff-filter=U | tail -1', 0))
+  " windows version
   elseif s:fexists(git_dir . '/MERGE_HEAD') ||
-        \ !empty(s:git_cmd('diff --shortstat --diff-filter=U | tail -1', 0))
+        \ !empty(s:git_cmd_tail('diff --shortstat --diff-filter=U', 0, -1))
     return 'merge'
   elseif s:fexists(git_dir . '/CHERRY_PICK_HEAD')
     return 'cherry-pick'
@@ -342,7 +375,8 @@ function! twiggy#get_branches() abort
             \  })
     endif
 
-  let reflog = s:get_uniq_branch_names_from_reflog()
+  " let reflog = s:get_uniq_branch_names_from_reflog()
+  let reflog = s:get_uniq_branch_names_from_reflog_win()
   let s:branches_not_in_reflog = []
 
   " Index locals by branch name for fast look-up while sorting
@@ -455,7 +489,7 @@ function! TwiggyBranchUnderCursor() abort
 
   return s:branch_under_cursor()
 endfunction
-
+"
 "   {{{2 get_uniq_branch_names_from_reflog
 " http://stackoverflow.com/questions/14062402/awk-using-a-file-to-filter-another-one-out-tr
 function! s:get_uniq_branch_names_from_reflog() abort
@@ -464,6 +498,34 @@ function! s:get_uniq_branch_names_from_reflog() abort
   let cmd.= "awk " . shellescape('!f[$0]++') . ")"
 
   return s:system(cmd, 0)
+endfunction
+
+"   {{{2 get_uniq_branch_names_from_reflog
+" http://stackoverflow.com/questions/14062402/awk-using-a-file-to-filter-another-one-out-tr
+function! s:get_uniq_branch_names_from_reflog_win() abort
+  " filter "main" from "other" list
+  " pattern: awk 'FNR==NR { a[$NF]; next } !($NF in a)' other main
+  
+  " filter script, with other (filtering list) (in "<(...)")
+  let cmd = "awk 'FNR==NR { a[$NF]; next } $NF in a' <(" . s:gitize('branch --list') . ") "
+  " main file
+  let cmd.= "<(" . s:gitize('reflog') . " | awk -F\" \" '/checkout: moving from/ { print $8 }' | "
+    " list reflog
+    " cari yg checkout: moving from
+    " ambil kata terakhir, yaitu branch tujuan
+    "
+  " ngelakuin 'uniq' dari destination branch yg ditemuin
+  let cmd.= "awk " . shellescape('!f[$0]++') . ")"
+
+  let other = s:system(s:gitize('branch --list'), 0)
+  let main = s:system(s:gitize('reflog') , 0)
+  " echom "other: "
+  " echom other
+  " echom "main: "
+  " echom main
+
+  " return s:system(cmd, 0)
+  return other
 endfunction
 
 "   {{{2 get_merged_branches
@@ -878,13 +940,16 @@ function! s:Render() abort
   if s:showing_full_ui() && !s:attn_mode()
     " We don't need to manually add a second empty line here since
     " s:standard_view() will automatically add one.
+    " echom "debugext:1"
     call extend(output, ["press ? for help"])
   endif
 
   if s:attn_mode()
     let view = "s:" . s:sub(t:twiggy_git_mode, '-', '_') . "_view"
+    " echom "debugext:2"
     call extend(output, call(view, []))
   else
+    " echom "debugext:3"
     call extend(output, s:standard_view())
   end
 
